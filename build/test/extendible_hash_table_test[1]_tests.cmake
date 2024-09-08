@@ -1,0 +1,7 @@
+add_test( ExtendibleHashTableTest.SampleTest /home/cky/Desktop/bust/build/test/extendible_hash_table_test [==[--gtest_filter=ExtendibleHashTableTest.DISABLED_SampleTest]==] --gtest_also_run_disabled_tests [==[--gtest_color=auto]==] [==[--gtest_output=xml:/home/cky/Desktop/bust/build/test/extendible_hash_table_test.xml]==] [==[--gtest_catch_exceptions=0]==])
+set_tests_properties( ExtendibleHashTableTest.SampleTest PROPERTIES DISABLED TRUE)
+set_tests_properties( ExtendibleHashTableTest.SampleTest PROPERTIES WORKING_DIRECTORY /home/cky/Desktop/bust/build/test TIMEOUT 120)
+add_test( ExtendibleHashTableTest.ConcurrentInsertTest /home/cky/Desktop/bust/build/test/extendible_hash_table_test [==[--gtest_filter=ExtendibleHashTableTest.DISABLED_ConcurrentInsertTest]==] --gtest_also_run_disabled_tests [==[--gtest_color=auto]==] [==[--gtest_output=xml:/home/cky/Desktop/bust/build/test/extendible_hash_table_test.xml]==] [==[--gtest_catch_exceptions=0]==])
+set_tests_properties( ExtendibleHashTableTest.ConcurrentInsertTest PROPERTIES DISABLED TRUE)
+set_tests_properties( ExtendibleHashTableTest.ConcurrentInsertTest PROPERTIES WORKING_DIRECTORY /home/cky/Desktop/bust/build/test TIMEOUT 120)
+set( extendible_hash_table_test_TESTS ExtendibleHashTableTest.SampleTest ExtendibleHashTableTest.ConcurrentInsertTest)

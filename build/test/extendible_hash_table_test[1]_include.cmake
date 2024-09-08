@@ -1,0 +1,5 @@
+if(EXISTS "/home/cky/Desktop/bust/build/test/extendible_hash_table_test[1]_tests.cmake")
+  include("/home/cky/Desktop/bust/build/test/extendible_hash_table_test[1]_tests.cmake")
+else()
+  add_test(extendible_hash_table_test_NOT_BUILT extendible_hash_table_test_NOT_BUILT)
+endif()
