@@ -202,6 +202,18 @@ class LockManager {
    *    After a resource is unlocked, lock manager should update the transaction's lock sets
    *    appropriately (check transaction.h)
    */
+  auto IsUpgradeCompatible(LockMode current_mode, LockMode new_mode) -> bool;
+  auto InsertOrDeleteTableLockSet(Transaction *txn, const std::shared_ptr<LockRequest> &lock_request,
+                                  bool insert) -> void;
+  auto GrantLock(const std::shared_ptr<LockRequest> &lock_request,
+                 const std::shared_ptr<LockRequestQueue> &lock_request_queue) -> bool;
+  auto InsertOrDeleteRowLockSet(Transaction *txn, const std::shared_ptr<LockRequest> &lock_request,
+                                bool insert) -> void;
+  auto InsertRowLockSet(const std::shared_ptr<std::unordered_map<table_oid_t, std::unordered_set<RID>>> &lock_set,
+                        const table_oid_t &oid, const RID &rid) -> void;
+
+  auto DeleteRowLockSet(const std::shared_ptr<std::unordered_map<table_oid_t, std::unordered_set<RID>>> &lock_set,
+                        const table_oid_t &oid, const RID &rid) -> void;
 
   /**
    * Acquire a lock on table_oid_t in the given lock_mode.
