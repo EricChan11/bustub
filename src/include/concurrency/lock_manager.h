@@ -210,10 +210,23 @@ class LockManager {
   auto InsertOrDeleteRowLockSet(Transaction *txn, const std::shared_ptr<LockRequest> &lock_request,
                                 bool insert) -> void;
   auto InsertRowLockSet(const std::shared_ptr<std::unordered_map<table_oid_t, std::unordered_set<RID>>> &lock_set,
-                        const table_oid_t &oid, const RID &rid) -> void;
+                        const table_oid_t &oid, const RID &rid) -> void {
+    auto row_lock_set = lock_set->find(oid);
+    if (row_lock_set == lock_set->end()) {
+      lock_set->emplace(oid, std::unordered_set<RID>{});
+      row_lock_set = lock_set->find(oid);
+    }
+    row_lock_set->second.emplace(rid);
+  }
 
   auto DeleteRowLockSet(const std::shared_ptr<std::unordered_map<table_oid_t, std::unordered_set<RID>>> &lock_set,
-                        const table_oid_t &oid, const RID &rid) -> void;
+                        const table_oid_t &oid, const RID &rid) -> void {
+    auto row_lock_set = lock_set->find(oid);
+    if (row_lock_set == lock_set->end()) {
+      return;
+    }
+    row_lock_set->second.erase(rid);
+  }
 
   /**
    * Acquire a lock on table_oid_t in the given lock_mode.

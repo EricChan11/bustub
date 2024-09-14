@@ -36,36 +36,47 @@ auto LockManager::IsUpgradeCompatible(LockMode current_mode, LockMode new_mode) 
   }
   return false;
 }
-
 void LockManager::InsertOrDeleteTableLockSet(Transaction *txn, const std::shared_ptr<LockRequest> &lock_request,
                                              bool insert) {
-  // Lambda function to insert or delete from the specified lock set
-  auto modify_lock_set = [insert](auto &lock_set, auto oid) {
-    if (insert) {
-      lock_set->insert(oid);
-    } else {
-      lock_set->erase(oid);
-    }
-  };
-
   switch (lock_request->lock_mode_) {
     case LockMode::SHARED:
-      modify_lock_set(txn->GetSharedTableLockSet(), lock_request->oid_);
+      if (insert) {
+        txn->GetSharedTableLockSet()->insert(lock_request->oid_);
+      } else {
+        txn->GetSharedTableLockSet()->erase(lock_request->oid_);
+      }
       break;
     case LockMode::EXCLUSIVE:
-      modify_lock_set(txn->GetExclusiveTableLockSet(), lock_request->oid_);
+      if (insert) {
+        txn->GetExclusiveTableLockSet()->insert(lock_request->oid_);
+      } else {
+        txn->GetExclusiveTableLockSet()->erase(lock_request->oid_);
+      }
       break;
     case LockMode::INTENTION_SHARED:
-      modify_lock_set(txn->GetIntentionSharedTableLockSet(), lock_request->oid_);
+      if (insert) {
+        txn->GetIntentionSharedTableLockSet()->insert(lock_request->oid_);
+      } else {
+        txn->GetIntentionSharedTableLockSet()->erase(lock_request->oid_);
+      }
       break;
     case LockMode::INTENTION_EXCLUSIVE:
-      modify_lock_set(txn->GetIntentionExclusiveTableLockSet(), lock_request->oid_);
+      if (insert) {
+        txn->GetIntentionExclusiveTableLockSet()->insert(lock_request->oid_);
+      } else {
+        txn->GetIntentionExclusiveTableLockSet()->erase(lock_request->oid_);
+      }
       break;
     case LockMode::SHARED_INTENTION_EXCLUSIVE:
-      modify_lock_set(txn->GetSharedIntentionExclusiveTableLockSet(), lock_request->oid_);
+      if (insert) {
+        txn->GetSharedIntentionExclusiveTableLockSet()->insert(lock_request->oid_);
+      } else {
+        txn->GetSharedIntentionExclusiveTableLockSet()->erase(lock_request->oid_);
+      }
       break;
   }
 }
+
 auto LockManager::GrantLock(const std::shared_ptr<LockRequest> &lock_request,
                             const std::shared_ptr<LockRequestQueue> &lock_request_queue) -> bool {
   for (auto &lr : lock_request_queue->request_queue_) {
@@ -105,24 +116,7 @@ auto LockManager::GrantLock(const std::shared_ptr<LockRequest> &lock_request,
   }
   return false;
 }
-auto InsertRowLockSet(const std::shared_ptr<std::unordered_map<table_oid_t, std::unordered_set<RID>>> &lock_set,
-                      const table_oid_t &oid, const RID &rid) -> void {
-  auto row_lock_set = lock_set->find(oid);
-  if (row_lock_set == lock_set->end()) {
-    lock_set->emplace(oid, std::unordered_set<RID>{});
-    row_lock_set = lock_set->find(oid);
-  }
-  row_lock_set->second.emplace(rid);
-}
 
-auto DeleteRowLockSet(const std::shared_ptr<std::unordered_map<table_oid_t, std::unordered_set<RID>>> &lock_set,
-                      const table_oid_t &oid, const RID &rid) -> void {
-  auto row_lock_set = lock_set->find(oid);
-  if (row_lock_set == lock_set->end()) {
-    return;
-  }
-  row_lock_set->second.erase(rid);
-}
 void LockManager::InsertOrDeleteRowLockSet(Transaction *txn, const std::shared_ptr<LockRequest> &lock_request,
                                            bool insert) {
   auto s_row_lock_set = txn->GetSharedRowLockSet();
@@ -213,18 +207,21 @@ auto LockManager::LockTable(Transaction *txn, LockMode lock_mode, const table_oi
       }
 
       lock_request_queue->request_queue_.remove(request);
-      InsertOrDeleteTableLockSet(txn, request, false);
+
+      std::shared_ptr<LockRequest> request_ptr(request);  // 将 LockRequest* 转换为 std::shared_ptr<LockRequest>
+      InsertOrDeleteTableLockSet(txn, request_ptr, false);
+      // InsertOrDeleteTableLockSet(txn, request, false);
 
       auto upgrade_lock_request = std::make_shared<LockRequest>(txn->GetTransactionId(), lock_mode, oid);
-
-      std::list<std::shared_ptr<LockRequest>>::iterator lr_iter;
+      // here
+      std::list<LockRequest *>::iterator lr_iter;
       for (lr_iter = lock_request_queue->request_queue_.begin(); lr_iter != lock_request_queue->request_queue_.end();
            lr_iter++) {
         if (!(*lr_iter)->granted_) {
           break;
         }
       }
-      lock_request_queue->request_queue_.insert(lr_iter, upgrade_lock_request);
+      lock_request_queue->request_queue_.insert(lr_iter, upgrade_lock_request.get());
       lock_request_queue->upgrading_ = txn->GetTransactionId();
 
       std::unique_lock<std::mutex> lock(lock_request_queue->latch_, std::adopt_lock);
@@ -232,7 +229,7 @@ auto LockManager::LockTable(Transaction *txn, LockMode lock_mode, const table_oi
         lock_request_queue->cv_.wait(lock);
         if (txn->GetState() == TransactionState::ABORTED) {
           lock_request_queue->upgrading_ = INVALID_TXN_ID;
-          lock_request_queue->request_queue_.remove(upgrade_lock_request);
+          lock_request_queue->request_queue_.remove(upgrade_lock_request.get());
           lock_request_queue->cv_.notify_all();
           return false;
         }
@@ -250,13 +247,13 @@ auto LockManager::LockTable(Transaction *txn, LockMode lock_mode, const table_oi
   }
 
   auto lock_request = std::make_shared<LockRequest>(txn->GetTransactionId(), lock_mode, oid);
-  lock_request_queue->request_queue_.push_back(lock_request);
+  lock_request_queue->request_queue_.push_back(lock_request.get());
 
   std::unique_lock<std::mutex> lock(lock_request_queue->latch_, std::adopt_lock);
   while (!GrantLock(lock_request, lock_request_queue)) {
     lock_request_queue->cv_.wait(lock);
     if (txn->GetState() == TransactionState::ABORTED) {
-      lock_request_queue->request_queue_.remove(lock_request);
+      lock_request_queue->request_queue_.remove(lock_request.get());
       lock_request_queue->cv_.notify_all();
       return false;
     }
@@ -303,26 +300,28 @@ auto LockManager::UnlockTable(Transaction *txn, const table_oid_t &oid) -> bool 
       lock_request_queue->cv_.notify_all();
       lock_request_queue->latch_.unlock();
 
-      bool isRepeatableReadAndLockModeSharedOrExclusive =
+      bool is_repeatable_read_and_lock_mode_shared_or_exclusive =
           txn->GetIsolationLevel() == IsolationLevel::REPEATABLE_READ &&
           (lock_request->lock_mode_ == LockMode::SHARED || lock_request->lock_mode_ == LockMode::EXCLUSIVE);
 
-      bool isReadCommittedAndLockModeExclusive =
+      bool is_read_committed_and_lock_mode_exclusive =
           txn->GetIsolationLevel() == IsolationLevel::READ_COMMITTED && lock_request->lock_mode_ == LockMode::EXCLUSIVE;
 
-      bool isReadUncommittedAndLockModeExclusive = txn->GetIsolationLevel() == IsolationLevel::READ_UNCOMMITTED &&
-                                                   lock_request->lock_mode_ == LockMode::EXCLUSIVE;
+      bool is_read_uncommitted_and_lock_mode_exclusive = txn->GetIsolationLevel() == IsolationLevel::READ_UNCOMMITTED &&
+                                                         lock_request->lock_mode_ == LockMode::EXCLUSIVE;
 
-      bool shouldShrink = isRepeatableReadAndLockModeSharedOrExclusive || isReadCommittedAndLockModeExclusive ||
-                          isReadUncommittedAndLockModeExclusive;
+      bool should_shrink = is_repeatable_read_and_lock_mode_shared_or_exclusive ||
+                           is_read_committed_and_lock_mode_exclusive || is_read_uncommitted_and_lock_mode_exclusive;
 
-      if (shouldShrink) {
+      if (should_shrink) {
         if (txn->GetState() != TransactionState::COMMITTED && txn->GetState() != TransactionState::ABORTED) {
           txn->SetState(TransactionState::SHRINKING);
         }
       }
+      std::shared_ptr<LockRequest> lock_request_ptr(lock_request);
+      InsertOrDeleteTableLockSet(txn, lock_request_ptr, false);
+      // InsertOrDeleteTableLockSet(txn, lock_request, false);
 
-      InsertOrDeleteTableLockSet(txn, lock_request, false);
       return true;
     }
   }
@@ -412,17 +411,21 @@ auto LockManager::LockRow(Transaction *txn, LockMode lock_mode, const table_oid_
       }
 
       lock_request_queue->request_queue_.remove(request);
-      InsertOrDeleteRowLockSet(txn, request, false);
+
+      std::shared_ptr<LockRequest> request_ptr(request);
+      InsertOrDeleteRowLockSet(txn, request_ptr, false);
+      // InsertOrDeleteRowLockSet(txn, request, false);
+
       auto upgrade_lock_request = std::make_shared<LockRequest>(txn->GetTransactionId(), lock_mode, oid, rid);
 
-      std::list<std::shared_ptr<LockRequest>>::iterator lr_iter;
+      std::list<LockRequest *>::iterator lr_iter;
       for (lr_iter = lock_request_queue->request_queue_.begin(); lr_iter != lock_request_queue->request_queue_.end();
            lr_iter++) {
         if (!(*lr_iter)->granted_) {
           break;
         }
       }
-      lock_request_queue->request_queue_.insert(lr_iter, upgrade_lock_request);
+      lock_request_queue->request_queue_.insert(lr_iter, upgrade_lock_request.get());
       lock_request_queue->upgrading_ = txn->GetTransactionId();
 
       std::unique_lock<std::mutex> lock(lock_request_queue->latch_, std::adopt_lock);
@@ -430,7 +433,7 @@ auto LockManager::LockRow(Transaction *txn, LockMode lock_mode, const table_oid_
         lock_request_queue->cv_.wait(lock);
         if (txn->GetState() == TransactionState::ABORTED) {
           lock_request_queue->upgrading_ = INVALID_TXN_ID;
-          lock_request_queue->request_queue_.remove(upgrade_lock_request);
+          lock_request_queue->request_queue_.remove(upgrade_lock_request.get());
           lock_request_queue->cv_.notify_all();
           return false;
         }
@@ -448,13 +451,13 @@ auto LockManager::LockRow(Transaction *txn, LockMode lock_mode, const table_oid_
   }
 
   auto lock_request = std::make_shared<LockRequest>(txn->GetTransactionId(), lock_mode, oid, rid);
-  lock_request_queue->request_queue_.push_back(lock_request);
+  lock_request_queue->request_queue_.push_back(lock_request.get());
 
   std::unique_lock<std::mutex> lock(lock_request_queue->latch_, std::adopt_lock);
   while (!GrantLock(lock_request, lock_request_queue)) {
     lock_request_queue->cv_.wait(lock);
     if (txn->GetState() == TransactionState::ABORTED) {
-      lock_request_queue->request_queue_.remove(lock_request);
+      lock_request_queue->request_queue_.remove(lock_request.get());
       lock_request_queue->cv_.notify_all();
       return false;
     }
@@ -501,7 +504,9 @@ auto LockManager::UnlockRow(Transaction *txn, const table_oid_t &oid, const RID 
         }
       }
 
-      InsertOrDeleteRowLockSet(txn, lock_request, false);
+      std::shared_ptr<LockRequest> lock_request_ptr(lock_request);
+      InsertOrDeleteRowLockSet(txn, lock_request_ptr, false);
+      // InsertOrDeleteRowLockSet(txn, lock_request, false);
       return true;
     }
   }
