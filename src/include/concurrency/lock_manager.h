@@ -17,6 +17,7 @@
 #include <list>
 #include <memory>
 #include <mutex>  // NOLINT
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -321,6 +322,28 @@ class LockManager {
    * Runs cycle detection in the background.
    */
   auto RunCycleDetection() -> void;
+  auto Dfs(txn_id_t txn_id) -> bool {
+    if (safe_set_.find(txn_id) != safe_set_.end()) {
+      return false;
+    }
+    active_set_.insert(txn_id);
+
+    std::vector<txn_id_t> &next_node_vector = waits_for_[txn_id];
+    std::sort(next_node_vector.begin(), next_node_vector.end());
+    for (txn_id_t const next_node : next_node_vector) {
+      if (active_set_.find(next_node) != active_set_.end()) {
+        return true;
+      }
+      if (Dfs(next_node)) {
+        return true;
+      }
+    }
+
+    active_set_.erase(txn_id);
+    safe_set_.insert(txn_id);
+    return false;
+  }
+  auto DeleteNode(txn_id_t txn_id) -> void;
 
  private:
   /** Fall 2022 */
@@ -339,6 +362,13 @@ class LockManager {
   /** Waits-for graph representation. */
   std::unordered_map<txn_id_t, std::vector<txn_id_t>> waits_for_;
   std::mutex waits_for_latch_;
+
+  std::set<txn_id_t> safe_set_;
+  std::set<txn_id_t> txn_set_;
+  std::unordered_set<txn_id_t> active_set_;
+
+  std::unordered_map<txn_id_t, RID> map_txn_rid_;
+  std::unordered_map<txn_id_t, table_oid_t> map_txn_oid_;
 };
 
 }  // namespace bustub
