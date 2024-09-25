@@ -18,48 +18,46 @@ namespace bustub {
 
 InsertExecutor::InsertExecutor(ExecutorContext *exec_ctx, const InsertPlanNode *plan,
                                std::unique_ptr<AbstractExecutor> &&child_executor)
-    : AbstractExecutor(exec_ctx) {
-  plan_ = plan;
-  table_info_ = exec_ctx->GetCatalog()->GetTable(plan->TableOid());
-  child_executor_ = std::move(child_executor);
-}
+    : AbstractExecutor(exec_ctx), plan_(plan), child_executor_(std::move(child_executor)) {}
 
 void InsertExecutor::Init() {
   child_executor_->Init();
-  table_indexes_ = exec_ctx_->GetCatalog()->GetTableIndexes(table_info_->name_);
+  TableInfo *table_info = exec_ctx_->GetCatalog()->GetTable(plan_->TableOid());
+  exec_ctx_->GetLockManager()->LockTable(exec_ctx_->GetTransaction(), LockManager::LockMode::INTENTION_EXCLUSIVE,
+                                         table_info->oid_);
 }
 
-auto InsertExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
-  if (is_end_) {
+auto InsertExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {  // 插入完毕返回 false
+  if (has_inserted_) {
     return false;
   }
-  Tuple to_insert_tuple{};
-  RID emit_rid;
-  int32_t insert_count = 0;
+  has_inserted_ = true;
 
-  while (child_executor_->Next(&to_insert_tuple, &emit_rid)) {
-    // 递归调用child_executor_直到找到合适的插入位置
-    bool inserted = table_info_->table_->InsertTuple(to_insert_tuple, rid, exec_ctx_->GetTransaction());
+  // 获取待插入的表信息及其索引列表
+  TableInfo *table_info = exec_ctx_->GetCatalog()->GetTable(plan_->TableOid());
+  std::vector<IndexInfo *> index_info = exec_ctx_->GetCatalog()->GetTableIndexes(table_info->name_);
 
-    if (inserted) {
-      // 可插入时进行多版本并发控制
+  // 从子执行器 Values 中逐个获取元组并插入到表中，同时更新所有的索引
+  int insert_count = 0;
+  while (child_executor_->Next(tuple, rid)) {
+    table_info->table_->InsertTuple(*tuple, rid, exec_ctx_->GetTransaction());
 
-      // 需要更新插入元组的表的所有索引，table_indexes_中存放了表中的所有索引
-      std::for_each(table_indexes_.begin(), table_indexes_.end(),
-                    [&to_insert_tuple, &rid, &table_info = table_info_, &exec_ctx = exec_ctx_](IndexInfo *index) {
-                      // 拿到需要插入的tuple，和rid以及表的索引信息，执行索引插入
-                      index->index_->InsertEntry(to_insert_tuple.KeyFromTuple(table_info->schema_, index->key_schema_,
-                                                                              index->index_->GetKeyAttrs()),
-                                                 *rid, exec_ctx->GetTransaction());
-                    });
-      insert_count++;
+    exec_ctx_->GetLockManager()->LockRow(exec_ctx_->GetTransaction(), LockManager::LockMode::EXCLUSIVE,
+                                         table_info->oid_, *rid);
+
+    for (const auto &index : index_info) {
+      // 根据索引的模式从数据元组中构造索引元组，并插入到索引中
+      Tuple key_tuple = tuple->KeyFromTuple(child_executor_->GetOutputSchema(), index->key_schema_,
+                                            index->index_->GetMetadata()->GetKeyAttrs());
+      index->index_->InsertEntry(key_tuple, *rid, exec_ctx_->GetTransaction());
     }
+    insert_count++;
   }
-  std::vector<Value> values{};
-  values.reserve(GetOutputSchema().GetColumnCount());
-  values.emplace_back(TypeId::INTEGER, insert_count);
-  *tuple = Tuple{values, &GetOutputSchema()};
-  is_end_ = true;
+
+  // 这里的 tuple 不再对应实际的数据行，而是用来存储插入操作的影响行数
+  std::vector<Value> result{Value(INTEGER, insert_count)};
+  *tuple = Tuple(result, &plan_->OutputSchema());
+
   return true;
 }
 

@@ -14,13 +14,11 @@
 
 #include <memory>
 #include <utility>
-#include <vector>
 
 #include "execution/executor_context.h"
 #include "execution/executors/abstract_executor.h"
 #include "execution/plans/insert_plan.h"
 #include "storage/table/tuple.h"
-
 
 namespace bustub {
 
@@ -59,10 +57,10 @@ class InsertExecutor : public AbstractExecutor {
  private:
   /** The insert plan node to be executed*/
   const InsertPlanNode *plan_;
+  /** 子执行器，对于插入操作来说通常是 Values 执行器 */
   std::unique_ptr<AbstractExecutor> child_executor_;
-  std::vector<IndexInfo *> table_indexes_;
-  bool is_end_{false};
-  const TableInfo *table_info_;
+  /** 标识是否已经完成插入操作 */
+  bool has_inserted_ = false;
 };
 
 }  // namespace bustub

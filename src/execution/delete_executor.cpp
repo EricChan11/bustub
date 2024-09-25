@@ -18,46 +18,45 @@ namespace bustub {
 
 DeleteExecutor::DeleteExecutor(ExecutorContext *exec_ctx, const DeletePlanNode *plan,
                                std::unique_ptr<AbstractExecutor> &&child_executor)
-    : AbstractExecutor(exec_ctx), plan_{plan}, child_executor_{std::move(child_executor)} {
-  this->table_info_ = this->exec_ctx_->GetCatalog()->GetTable(plan_->table_oid_);
-}
+    : AbstractExecutor(exec_ctx), plan_(plan), child_executor_(std::move(child_executor)) {}
 
 void DeleteExecutor::Init() {
   child_executor_->Init();
-
-  table_indexes_ = exec_ctx_->GetCatalog()->GetTableIndexes(table_info_->name_);
+  TableInfo *table_info = exec_ctx_->GetCatalog()->GetTable(plan_->TableOid());
+  exec_ctx_->GetLockManager()->LockTable(exec_ctx_->GetTransaction(), LockManager::LockMode::INTENTION_EXCLUSIVE,
+                                         table_info->oid_);
 }
 
 auto DeleteExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {
-  // 删除和插入很像，
-  if (is_end_) {
+  if (has_deleted_) {
     return false;
   }
-  Tuple to_delete_tuple{};
-  RID emit_rid;
-  int32_t delete_count = 0;
+  has_deleted_ = true;
 
-  while (child_executor_->Next(&to_delete_tuple, &emit_rid)) {
-    // Delete 时，并不是直接删除，而是将 tuple 标记为删除状态，也就是逻辑删除。
-    // （在事务提交后，再进行物理删除，Project 3 中无需实现）
-    bool deleted = table_info_->table_->MarkDelete(emit_rid, exec_ctx_->GetTransaction());
+  // 获取待删除的表信息及其索引列表
+  TableInfo *table_info = exec_ctx_->GetCatalog()->GetTable(plan_->TableOid());
+  std::vector<IndexInfo *> index_info = exec_ctx_->GetCatalog()->GetTableIndexes(table_info->name_);
 
-    // 更新索引
-    if (deleted) {
-      std::for_each(table_indexes_.begin(), table_indexes_.end(),
-                    [&to_delete_tuple, &rid, &table_info = table_info_, &exec_ctx = exec_ctx_](IndexInfo *index) {
-                      index->index_->DeleteEntry(to_delete_tuple.KeyFromTuple(table_info->schema_, index->key_schema_,
-                                                                              index->index_->GetKeyAttrs()),
-                                                 *rid, exec_ctx->GetTransaction());
-                    });
-      delete_count++;
+  // 从子执行器 Values 中逐个获取元组并插入到表中，同时更新所有的索引
+  int delete_count = 0;
+  while (child_executor_->Next(tuple, rid)) {
+    exec_ctx_->GetLockManager()->LockRow(exec_ctx_->GetTransaction(), LockManager::LockMode::EXCLUSIVE,
+                                         table_info->oid_, *rid);
+
+    table_info->table_->MarkDelete(*rid, exec_ctx_->GetTransaction());
+    for (const auto &index : index_info) {
+      // 根据索引的模式从数据元组中构造索引元组，并从索引中删除
+      Tuple key_tuple = tuple->KeyFromTuple(child_executor_->GetOutputSchema(), index->key_schema_,
+                                            index->index_->GetMetadata()->GetKeyAttrs());
+      index->index_->DeleteEntry(key_tuple, *rid, exec_ctx_->GetTransaction());
     }
+    delete_count++;
   }
-  std::vector<Value> values{};
-  values.reserve(GetOutputSchema().GetColumnCount());
-  values.emplace_back(TypeId::INTEGER, delete_count);
-  *tuple = Tuple{values, &GetOutputSchema()};
-  is_end_ = true;
+
+  // 这里的 tuple 不再对应实际的数据行，而是用来存储插入操作的影响行数
+  std::vector<Value> result{Value(INTEGER, delete_count)};
+  *tuple = Tuple(result, &plan_->OutputSchema());
+
   return true;
 }
 
